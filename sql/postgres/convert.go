@@ -21,8 +21,10 @@ func FormatType(t schema.Type) (string, error) {
 	switch t := t.(type) {
 	case *ArrayType:
 		f = strings.ToLower(t.T)
-	case *BitType:
+	case *schema.BitType:
 		f = strings.ToLower(t.T)
+		// BIT without a length is equivalent to BIT(1),
+		// BIT VARYING has unlimited length.
 		// BIT without a length is equivalent to BIT(1),
 		// BIT VARYING has unlimited length.
 		if f == TypeBit && t.Len > 1 || f == TypeBitVar && t.Len > 0 {
@@ -352,6 +354,7 @@ type columnDesc struct {
 	scale         int64
 	parts         []string
 	interval      string
+	Len           int
 }
 
 var reDigits = regexp.MustCompile(`\d`)
@@ -368,12 +371,17 @@ func parseColumn(s string) (*columnDesc, error) {
 		c   = &columnDesc{
 			typ:   parts[0],
 			parts: parts,
+			Len:   0,
 		}
 	)
 	switch c.parts[0] {
 	case TypeVarChar, TypeCharVar, TypeChar, TypeCharacter:
-		if err := parseCharParts(c.parts, c); err != nil {
-			return nil, err
+		if len(c.parts) > 1 {
+			size, err := strconv.ParseInt(c.parts[1], 10, 64)
+			if err != nil {
+				return nil, fmt.Errorf("postgres: parse size %q: %w", c.parts[1], err)
+			}
+			c.size = size
 		}
 	case TypeDecimal, TypeNumeric, TypeFloat:
 		if len(parts) > 1 {
@@ -385,7 +393,7 @@ func parseColumn(s string) (*columnDesc, error) {
 		if len(parts) > 2 {
 			c.scale, err = strconv.ParseInt(parts[2], 10, 64)
 			if err != nil {
-				return nil, fmt.Errorf("postgres: parse scale %q: %w", parts[1], err)
+				return nil, fmt.Errorf("postgres: parse scale %q: %w", parts[2], err)
 			}
 		}
 	case TypeBit:
@@ -427,29 +435,6 @@ func parseColumn(s string) (*columnDesc, error) {
 	return c, nil
 }
 
-func parseCharParts(parts []string, c *columnDesc) error {
-	j := strings.Join(parts, " ")
-	switch {
-	case strings.HasPrefix(j, TypeVarChar):
-		c.typ = TypeVarChar
-		parts = parts[1:]
-	case strings.HasPrefix(j, TypeCharVar):
-		c.typ = TypeCharVar
-		parts = parts[2:]
-	default:
-		parts = parts[1:]
-	}
-	if len(parts) == 0 {
-		return nil
-	}
-	size, err := strconv.ParseInt(parts[0], 10, 64)
-	if err != nil {
-		return fmt.Errorf("postgres: parse size %q: %w", parts[0], err)
-	}
-	c.size = size
-	return nil
-}
-
 func parseBitParts(parts []string, c *columnDesc) error {
 	if len(parts) == 1 {
 		c.size = 1
@@ -465,7 +450,7 @@ func parseBitParts(parts []string, c *columnDesc) error {
 	}
 	size, err := strconv.ParseInt(parts[0], 10, 64)
 	if err != nil {
-		return fmt.Errorf("postgres: parse size %q: %w", parts[1], err)
+		return fmt.Errorf("postgres: parse size %q: %w", parts[0], err)
 	}
 	c.size = size
 	return nil

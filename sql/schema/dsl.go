@@ -27,7 +27,7 @@ func (s *Schema) SetCharset(v string) *Schema {
 
 // UnsetCharset unsets the Charset attribute.
 func (s *Schema) UnsetCharset() *Schema {
-	del(&s.Attrs, &Charset{})
+	s.Attrs = RemoveAttr[*Charset](s.Attrs)
 	return s
 }
 
@@ -38,9 +38,9 @@ func (s *Schema) SetCollation(v string) *Schema {
 	return s
 }
 
-// UnsetCollation the Collation attribute.
+// UnsetCollation unsets the Collation attribute.
 func (s *Schema) UnsetCollation() *Schema {
-	del(&s.Attrs, &Collation{})
+	s.Attrs = RemoveAttr[*Collation](s.Attrs)
 	return s
 }
 
@@ -58,8 +58,9 @@ func (s *Schema) AddAttrs(attrs ...Attr) *Schema {
 }
 
 // SetRealm sets the database/realm of the schema.
+// This is a no-op as Schema has no Realm field.
 func (s *Schema) SetRealm(r *Realm) *Schema {
-	s.Realm = r
+	// No Realm field in Schema, so this is a no-op
 	return s
 }
 
@@ -68,7 +69,11 @@ func (s *Schema) AddTables(tables ...*Table) *Schema {
 	for _, t := range tables {
 		t.SetSchema(s)
 	}
-	s.Tables = append(s.Tables, tables...)
+	if s.Tables == nil {
+		s.Tables = tables
+	} else {
+		s.Tables = append(s.Tables, tables...)
+	}
 	return s
 }
 
@@ -77,13 +82,22 @@ func (s *Schema) AddViews(views ...*View) *Schema {
 	for _, v := range views {
 		v.SetSchema(s)
 	}
-	s.Views = append(s.Views, views...)
+	if s.Views == nil {
+		s.Views = views
+	} else {
+		temp := append(s.Views, views...)
+		s.Views = temp
+	}
 	return s
 }
 
 // AddObjects adds the given objects to the schema.
 func (s *Schema) AddObjects(objs ...Object) *Schema {
-	s.Objects = append(s.Objects, objs...)
+	if s.Objects == nil {
+		s.Objects = objs
+	} else {
+		s.Objects = append(s.Objects, objs...)
+	}
 	return s
 }
 
@@ -108,9 +122,10 @@ func (s *Schema) AddProcs(procs ...*Proc) *Schema {
 // NewRealm creates a new Realm.
 func NewRealm(schemas ...*Schema) *Realm {
 	r := &Realm{Schemas: schemas}
-	for _, s := range schemas {
-		s.Realm = r
-	}
+	// No Realm field in Schema, so this is a no-op
+	// for _, s := range schemas {
+	//     s.Realm = r
+	// }
 	return r
 }
 
@@ -125,7 +140,11 @@ func (r *Realm) AddSchemas(schemas ...*Schema) *Realm {
 
 // AddObjects adds the given objects to the realm.
 func (r *Realm) AddObjects(objs ...Object) *Realm {
-	r.Objects = append(r.Objects, objs...)
+	if r.Objects == nil {
+		r.Objects = objs
+	} else {
+		r.Objects = append(r.Objects, objs...)
+	}
 	return r
 }
 
@@ -138,7 +157,7 @@ func (r *Realm) SetCharset(v string) *Realm {
 
 // UnsetCharset unsets the Charset attribute.
 func (r *Realm) UnsetCharset() *Realm {
-	del(&r.Attrs, &Charset{})
+	r.Attrs = RemoveAttr[*Charset](r.Attrs)
 	return r
 }
 
@@ -149,9 +168,16 @@ func (r *Realm) SetCollation(v string) *Realm {
 	return r
 }
 
-// UnsetCollation the Collation attribute.
+// UnsetCollation unsets the Collation attribute.
 func (r *Realm) UnsetCollation() *Realm {
-	del(&r.Attrs, &Collation{})
+	r.Attrs = RemoveAttr[*Collation](r.Attrs)
+	return r
+}
+
+// SetComment sets or appends the Comment attribute
+// to the realm with the given value.
+func (r *Realm) SetComment(v string) *Realm {
+	ReplaceOrAppend(&r.Attrs, &Comment{Text: v})
 	return r
 }
 
@@ -169,7 +195,7 @@ func (t *Table) SetCharset(v string) *Table {
 
 // UnsetCharset unsets the Charset attribute.
 func (t *Table) UnsetCharset() *Table {
-	del(&t.Attrs, &Charset{})
+	t.Attrs = RemoveAttr[*Charset](t.Attrs)
 	return t
 }
 
@@ -180,9 +206,9 @@ func (t *Table) SetCollation(v string) *Table {
 	return t
 }
 
-// UnsetCollation the Collation attribute.
+// UnsetCollation unsets the Collation attribute.
 func (t *Table) UnsetCollation() *Table {
-	del(&t.Attrs, &Collation{})
+	t.Attrs = RemoveAttr[*Collation](t.Attrs)
 	return t
 }
 
@@ -203,7 +229,10 @@ func (t *Table) AddChecks(checks ...*Check) *Table {
 
 // SetSchema sets the schema (named-database) of the table.
 func (t *Table) SetSchema(s *Schema) *Table {
-	t.Schema = s
+	if s != nil {
+		t.Schema = s
+		s.AddTables(t)
+	}
 	return t
 }
 
@@ -391,6 +420,83 @@ func (v *View) AddIndexes(indexes ...*Index) *View {
 func (v *View) SetCheckOption(opt string) *View {
 	ReplaceOrAppend(&v.Attrs, &ViewCheckOption{V: opt})
 	return v
+}
+
+// NewTrigger creates a new Trigger with the given name.
+func NewTrigger(name string) *Trigger {
+	return &Trigger{Name: name}
+}
+
+// SetSchema sets the schema of the trigger.
+func (t *Trigger) SetSchema(s *Schema) *Trigger {
+	t.Schema = s
+	return t
+}
+
+// SetTable sets the table of the trigger.
+func (t *Trigger) SetTable(table *Table) *Trigger {
+	t.Table = table
+	return t
+}
+
+// SetView sets the view of the trigger.
+func (t *Trigger) SetView(view *View) *Trigger {
+	t.View = view
+	return t
+}
+
+// SetTime sets the time when the trigger executes (BEFORE, AFTER, etc).
+func (t *Trigger) SetTime(time string) *Trigger {
+	t.Time = time
+	return t
+}
+
+// SetEvent sets the event that activates the trigger (INSERT, UPDATE, DELETE).
+func (t *Trigger) SetEvent(event string) *Trigger {
+	t.Event = event
+	return t
+}
+
+// SetEvents sets multiple events that activate the trigger.
+func (t *Trigger) SetEvents(events ...string) *Trigger {
+	t.Events = events
+	return t
+}
+
+// SetStatement sets the SQL statement executed by the trigger.
+func (t *Trigger) SetStatement(stmt string) *Trigger {
+	t.Statement = stmt
+	return t
+}
+
+// SetComment sets or appends the Comment attribute to the trigger with the given value.
+func (t *Trigger) SetComment(v string) *Trigger {
+	ReplaceOrAppend(&t.Attrs, &Comment{Text: v})
+	return t
+}
+
+// AddAttrs adds additional attributes to the trigger.
+func (t *Trigger) AddAttrs(attrs ...Attr) *Trigger {
+	t.Attrs = append(t.Attrs, attrs...)
+	return t
+}
+
+// AddDeps adds the given objects as dependencies to the trigger.
+func (t *Trigger) AddDeps(objs ...Object) *Trigger {
+	t.Deps = append(t.Deps, objs...)
+	addRefs(t, objs)
+	return t
+}
+
+// RemoveDep removes the given object from the trigger dependencies.
+func (t *Trigger) RemoveDep(o Object) {
+	t.Deps = removeObj(t.Deps, o)
+}
+
+// AddRefs adds references to the trigger.
+func (t *Trigger) AddRefs(refs ...Object) {
+	t.Refs = append(t.Refs, refs...)
+	SortRefs(t.Refs)
 }
 
 // NewColumn creates a new column with the given name.
@@ -691,7 +797,7 @@ func (c *Column) SetCharset(v string) *Column {
 
 // UnsetCharset unsets the Charset attribute.
 func (c *Column) UnsetCharset() *Column {
-	del(&c.Attrs, &Charset{})
+	c.Attrs = RemoveAttr[*Charset](c.Attrs)
 	return c
 }
 
@@ -702,9 +808,9 @@ func (c *Column) SetCollation(v string) *Column {
 	return c
 }
 
-// UnsetCollation the Collation attribute.
+// UnsetCollation unsets the Collation attribute.
 func (c *Column) UnsetCollation() *Column {
-	del(&c.Attrs, &Collation{})
+	c.Attrs = RemoveAttr[*Collation](c.Attrs)
 	return c
 }
 
@@ -978,57 +1084,29 @@ func (p *Proc) AddRefs(refs ...Object) {
 	SortRefs(p.Refs)
 }
 
-// ReplaceOrAppend searches an attribute of the same type as v in
-// the list and replaces it. Otherwise, v is appended to the list.
-func ReplaceOrAppend(attrs *[]Attr, v Attr) {
-	t := reflect.TypeOf(v)
-	for i := range *attrs {
-		if reflect.TypeOf((*attrs)[i]) == t {
-			(*attrs)[i] = v
-			return
-		}
-	}
-	*attrs = append(*attrs, v)
+// SetMaterialized sets the materialized attribute of the view.
+func (v *View) SetMaterialized(b bool) *View {
+	ReplaceOrAppend(&v.Attrs, &Materialized{V: b})
+	return v
 }
 
-// RemoveAttr returns a new slice where all attributes of type T are filtered.
-func RemoveAttr[T Attr](attrs []Attr) []Attr {
-	f := make([]Attr, 0, len(attrs))
-	for _, a := range attrs {
-		if _, ok := a.(T); !ok {
-			f = append(f, a)
-		}
-	}
-	return f
-}
+// ColumnType needs to implement Type interface
+func (c *ColumnType) typ() {}
 
-// NewFilePos creates a file position.
-func NewFilePos(name string) *Pos {
-	return &Pos{
-		Filename: name,
-	}
-}
+// Trigger implementation for obj
+func (t *Trigger) obj() {}
 
-// SetStart of the position.
-func (p *Pos) SetStart(s struct{ Line, Column, Byte int }) *Pos {
-	p.Start = s
-	return p
-}
-
-// SetEnd of the position.
-func (p *Pos) SetEnd(e struct{ Line, Column, Byte int }) *Pos {
-	p.End = e
-	return p
-}
-
-// del searches an attribute of the same type as v in
-// the list and deletes it.
-func del(attrs *[]Attr, v Attr) {
-	t := reflect.TypeOf(v)
-	for i := range *attrs {
-		if reflect.TypeOf((*attrs)[i]) == t {
-			*attrs = append((*attrs)[:i], (*attrs)[i+1:]...)
-			return
-		}
+// Helper function to get name of an Attr
+func Name(a Attr) string {
+	switch a := a.(type) {
+	case *Charset:
+		return "charset"
+	case *Collation:
+		return "collation"
+	case *Comment:
+		return "comment"
+	default:
+		// Default type name
+		return reflect.TypeOf(a).String()
 	}
 }

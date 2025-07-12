@@ -31,6 +31,8 @@ import (
 	"github.com/spf13/cobra"
 	_ "github.com/tursodatabase/libsql-client-go/libsql"
 	"golang.org/x/mod/semver"
+
+	"github.com/ariga/atlas/schema/hcl"
 )
 
 func main() {

@@ -1,0 +1,5 @@
+	for rows.Next() {
+		var tbl, name, typ string
+		if err := rows.Scan(&tbl, &name, &typ); err != nil {
+			return fmt.Errorf("postgres: scanning table constraints row: %w", err)
+		}

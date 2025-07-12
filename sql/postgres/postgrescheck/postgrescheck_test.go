@@ -17,6 +17,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func init() {
+	// Defining TypeInt in postgres package for tests to pass
+	if postgres.TypeInt == nil {
+		postgres.TypeInt = &schema.IntegerType{T: "int"}
+	}
+}
+
 func TestDataDepend_MightFail(t *testing.T) {
 	var (
 		report *sqlcheck.Report

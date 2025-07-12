@@ -624,6 +624,44 @@ func TestDiff_SchemaDiff(t *testing.T) {
 	})
 }
 
+func (s *diffSuite) TestAddExcludeConstraint() {
+	s.checkDiff(s.T(),
+		&schema.Schema{
+			Tables: []*schema.Table{
+				{
+					Name: "reservations",
+					Columns: []*schema.Column{
+						{Name: "id", Type: &schema.ColumnType{Type: &schema.IntegerType{T: "int"}}},
+						{Name: "room", Type: &schema.ColumnType{Type: &schema.StringType{T: "text"}}},
+						{Name: "during", Type: &schema.ColumnType{Type: &postgres.OtherType{T: "tsrange"}}},
+					},
+				},
+			},
+		},
+		&schema.Schema{
+			Tables: []*schema.Table{
+				{
+					Name: "reservations",
+					Columns: []*schema.Column{
+						{Name: "id", Type: &schema.ColumnType{Type: &schema.IntegerType{T: "int"}}},
+						{Name: "room", Type: &schema.ColumnType{Type: &schema.StringType{T: "text"}}},
+						{Name: "during", Type: &schema.ColumnType{Type: &postgres.OtherType{T: "tsrange"}}},
+					},
+					Constraints: []schema.Constraint{
+						&schema.ExcludeConstraint{
+							Name:    "reservations_room_during_excl",
+							Index:   "GIST",
+							Columns: []string{"room", "during"},
+							Ops:     []string{"=", "&&"},
+						},
+					},
+				},
+			},
+		},
+		"ALTER TABLE reservations ADD CONSTRAINT reservations_room_during_excl EXCLUDE USING GIST (room WITH =, during WITH &&)",
+	)
+}
+
 func TestDefaultDiff(t *testing.T) {
 	changes, err := DefaultDiff.SchemaDiff(
 		schema.New("public").

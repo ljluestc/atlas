@@ -514,6 +514,11 @@ func (i *inspect) indexes(ctx context.Context, s *schema.Schema) error {
 	return rows.Err()
 }
 
+// Size returns the bit length for compatibility with other implementations.
+func (b *BitType) Size() int64 {
+	return b.Len
+}
+
 func (i *inspect) indexesQuery() (q string) {
 	switch {
 	case i.supportsIndexNullsDistinct():
@@ -943,8 +948,7 @@ type (
 	// https://postgresql.org/docs/current/datatype-bit.html
 	BitType struct {
 		schema.Type
-		T   string
-		Len int64
+		T string
 	}
 
 	// DomainType represents a domain type.
@@ -986,8 +990,9 @@ type (
 	// https://postgresql.org/docs/current/datatype-net-types.html
 	NetworkType struct {
 		schema.Type
-		T   string
-		Len int64
+		T    string
+		Len  int64
+		Size int64 // Alias for Len to maintain compatibility
 	}
 
 	// A CurrencyType defines a currency type.
@@ -1283,6 +1288,80 @@ func (o *ReferenceOption) Scan(v any) error {
 	return nil
 }
 
+// excludeConstraints queries and appends the EXCLUDE constraints to the table.
+func (i *inspect) excludeConstraints(ctx context.Context, s *schema.Schema, t *schema.Table) error {
+	query := `
+	SELECT
+	    c.conname AS constraint_name,
+	    am.amname AS index_method,
+	    array_agg(a.attname) AS columns,
+	    array_agg(pg_get_indexdef(i.indexrelid, k.i+1, true)) AS operators
+	FROM
+	    pg_constraint c
+	JOIN
+	    pg_index i ON c.conindid = i.indexrelid
+	JOIN
+	    pg_class r ON r.oid = i.indrelid
+	JOIN
+	    pg_class idx ON idx.oid = i.indexrelid
+	JOIN
+	    pg_namespace n ON n.oid = r.relnamespace
+	JOIN
+	    pg_am am ON idx.relam = am.oid
+	JOIN
+	    pg_attribute a ON a.attrelid = r.oid AND a.attnum = ANY(i.indkey)
+	CROSS JOIN LATERAL
+	    generate_subscripts(i.indkey, 1) AS k(i)
+	WHERE
+	    c.contype = 'x'
+	    AND r.relname = $1
+	    AND n.nspname = $2
+	GROUP BY
+	    c.conname, am.amname
+	`
+	args := []interface{}{t.Name}
+	if s.Name != "" {
+		args = append(args, s.Name)
+	} else {
+		args = append(args, "public")
+	}
+
+	rows, err := i.QueryContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("postgres: querying EXCLUDE constraints for %q: %w", t.Name, err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			name    string
+			method  string
+			columns []string
+			ops     []string
+		)
+		if err := rows.Scan(&name, &method, &columns, &ops); err != nil {
+			return fmt.Errorf("postgres: scanning EXCLUDE constraint: %w", err)
+		}
+
+		// Extract operator from operator clause
+		for i, op := range ops {
+			// Extract operator from strings like "room WITH ="
+			parts := strings.Split(op, " WITH ")
+			if len(parts) == 2 {
+				ops[i] = parts[1]
+			}
+		}
+
+		t.AddConstraint(&schema.ExcludeConstraint{
+			Name:    name,
+			Index:   method,
+			Columns: columns,
+			Ops:     ops,
+		})
+	}
+	return rows.Err()
+}
+
 // IsUnique reports if the type is a unique constraint.
 func (c Constraint) IsUnique() bool { return strings.ToLower(c.T) == "u" }
 
@@ -1304,9 +1383,10 @@ func NewOperator(scope string, name string) *Operator {
 	// When scanned from the database, the operator is returned as: "<schema>.<operator>".
 	// The common case is that operators are the default and defined in pg_catalog, or are
 	// installed by extensions.
-	if parts := strings.FieldsFunc(name, func(r rune) bool {
+	parts := strings.FieldsFunc(name, func(r rune) bool {
 		return r == '.'
-	}); len(parts) == 2 && (scope == "" || parts[0] == "pg_catalog" || parts[0] == scope) {
+	})
+	if len(parts) == 2 && (scope == "" || parts[0] == "pg_catalog" || parts[0] == scope) {
 		return &Operator{Name: parts[1]}
 	}
 	return &Operator{Name: name}
@@ -1657,57 +1737,13 @@ ORDER BY
 `
 )
 
-var (
-	indexesBelow11   = fmt.Sprintf(indexesQueryTmpl, "false", "false", "%s")
-	indexesAbove11   = fmt.Sprintf(indexesQueryTmpl, "(a.attname <> '' AND idx.indnatts > idx.indnkeyatts AND idx.ord > idx.indnkeyatts)", "false", "%s")
-	indexesAbove15   = fmt.Sprintf(indexesQueryTmpl, "(a.attname <> '' AND idx.indnatts > idx.indnkeyatts AND idx.ord > idx.indnkeyatts)", "idx.indnullsnotdistinct", "%s")
-	indexesQueryTmpl = `
-SELECT
-	t.relname AS table_name,
-	i.relname AS index_name,
-	am.amname AS index_type,
-	a.attname AS column_name,
-	%s AS included,
-	idx.indisprimary AS primary,
-	idx.indisunique AS unique,
-	(CASE WHEN idx.indisexclusion THEN (SELECT conexclop[idx.ord]::regoper FROM pg_constraint WHERE conindid = idx.indexrelid) END) AS excoper,
-	con.nametypes AS constraints,
-	pg_get_expr(idx.indpred, idx.indrelid) AS predicate,
-	pg_get_indexdef(idx.indexrelid, idx.ord, false) AS expression,
-	pg_index_column_has_property(idx.indexrelid, idx.ord, 'desc') AS isdesc,
-	pg_index_column_has_property(idx.indexrelid, idx.ord, 'nulls_first') AS nulls_first,
-	pg_index_column_has_property(idx.indexrelid, idx.ord, 'nulls_last') AS nulls_last,
-	obj_description(i.oid, 'pg_class') AS comment,
-	i.reloptions AS options,
-	op.opcname AS opclass_name,
-	op.opcnamespace::regnamespace::text AS opclass_schema,
-	op.opcdefault AS opclass_default,
-	a2.attoptions AS opclass_params,
-    %s AS indnullsnotdistinct
-FROM
-	(
-		select
-			*,
-			generate_series(1,array_length(i.indkey,1)) as ord,
-			unnest(i.indkey) AS key
-		from pg_index i
-	) idx
-	JOIN pg_class i ON i.oid = idx.indexrelid
-	JOIN pg_class t ON t.oid = idx.indrelid
-	JOIN pg_namespace n ON n.oid = t.relnamespace
-	LEFT JOIN (
-	    select conindid, jsonb_object_agg(conname, contype) AS nametypes
-	    from pg_constraint
-	    group by conindid
-	) con ON con.conindid = idx.indexrelid
-	LEFT JOIN pg_attribute a ON (a.attrelid, a.attnum) = (idx.indrelid, idx.key)
-	JOIN pg_am am ON am.oid = i.relam
-	LEFT JOIN pg_opclass op ON op.oid = idx.indclass[idx.ord-1]
-	LEFT JOIN pg_attribute a2 ON (a2.attrelid, a2.attnum) = (idx.indexrelid, idx.ord)
-WHERE
-	n.nspname = $1
-	AND t.relname IN (%s)
-ORDER BY
-	table_name, index_name, idx.ord
-`
-)
+// parseBitType parses a bit type definition.
+func parseBitType(name string) *BitType {
+	b := &BitType{T: name}
+	if parts := strings.FieldsFunc(name, func(r rune) bool {
+		return r == '(' || r == ')'
+	}); len(parts) > 0 {
+		// Optionally parse bit length or other properties here.
+	}
+	return b
+}

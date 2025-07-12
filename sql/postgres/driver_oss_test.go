@@ -157,6 +157,77 @@ func TestDriver_CheckClean(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestDriver_ExcludeConstraint(t *testing.T) {
+	drv, err := Open(pgURL(t, migrate.Snapshot{}))
+	require.NoError(t, err)
+
+	// Enable btree_gist extension if needed for test
+	_, err = drv.ExecContext(context.Background(), "CREATE EXTENSION IF NOT EXISTS btree_gist")
+	require.NoError(t, err)
+
+	undo := func() {
+		_, err := drv.ExecContext(context.Background(), "drop table if exists reservations")
+		require.NoError(t, err)
+	}
+	t.Cleanup(undo)
+	undo()
+
+	// Create a table with a tsrange column and an EXCLUDE constraint
+	reservations := &schema.Table{
+		Name: "reservations",
+		Columns: []*schema.Column{
+			{Name: "id", Type: &schema.ColumnType{Type: &postgres.IntegerType{T: "int"}, Raw: "int"}},
+			{Name: "room", Type: &schema.ColumnType{Type: &schema.StringType{T: "text"}, Raw: "text"}},
+			{Name: "during", Type: &schema.ColumnType{Type: &postgres.OtherType{T: "tsrange"}, Raw: "tsrange"}},
+		},
+		Constraints: []schema.Constraint{
+			&schema.ExcludeConstraint{
+				Name:    "reservations_room_during_excl",
+				Index:   "GIST",
+				Columns: []string{"room", "during"},
+				Ops:     []string{"=", "&&"},
+			},
+		},
+	}
+
+	// Create the table with the EXCLUDE constraint
+	err = drv.Create(context.Background(), reservations)
+	require.NoError(t, err)
+
+	// Verify the constraint exists
+	rows, err := drv.QueryContext(context.Background(),
+		"SELECT constraint_name FROM information_schema.table_constraints WHERE table_name = 'reservations' AND constraint_name = 'reservations_room_during_excl'")
+	require.NoError(t, err)
+	defer rows.Close()
+
+	var found bool
+	for rows.Next() {
+		var name string
+		require.NoError(t, rows.Scan(&name))
+		if name == "reservations_room_during_excl" {
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "EXCLUDE constraint was not created")
+
+	// Test that the constraint works by inserting overlapping records
+	_, err = drv.ExecContext(context.Background(),
+		"INSERT INTO reservations (id, room, during) VALUES (1, '123A', '[2023-01-01 14:00, 2023-01-01 15:00)')")
+	require.NoError(t, err)
+
+	// This should fail due to the EXCLUDE constraint
+	_, err = drv.ExecContext(context.Background(),
+		"INSERT INTO reservations (id, room, during) VALUES (2, '123A', '[2023-01-01 14:30, 2023-01-01 15:30)')")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "violates exclusion constraint")
+
+	// This should succeed (different room)
+	_, err = drv.ExecContext(context.Background(),
+		"INSERT INTO reservations (id, room, during) VALUES (3, '123B', '[2023-01-01 14:30, 2023-01-01 15:30)')")
+	require.NoError(t, err)
+}
+
 func TestDriver_Version(t *testing.T) {
 	db, m, err := sqlmock.New()
 	require.NoError(t, err)
@@ -255,4 +326,41 @@ func (m *mockPlanApplier) PlanChanges(_ context.Context, _ string, planned []sch
 func (m *mockPlanApplier) ApplyChanges(_ context.Context, applied []schema.Change, _ ...migrate.PlanOption) error {
 	m.applied = append(m.applied, applied...)
 	return nil
+}
+
+type mockExecQuerier struct {
+	lastQuery string
+}
+
+func (m *mockExecQuerier) ExecContext(ctx context.Context, query string, args ...any) (any, error) {
+	m.lastQuery = query
+	return nil, nil
+}
+
+func (m *mockExecQuerier) QueryContext(ctx context.Context, query string, args ...any) (any, error) {
+	return nil, nil
+}
+
+func TestAddExcludeConstraint(t *testing.T) {
+	mock := &mockExecQuerier{}
+	drv := &driver{conn: &conn{ExecQuerier: mock}}
+	table := &schema.Table{Name: "events"}
+	constraint := &schema.ExcludeConstraint{
+		Name: "exclude_events",
+		Elements: []*schema.ExcludeElement{
+			{Column: "room", Op: "="},
+			{Column: "during", Op: "&&"},
+		},
+		Attrs: []schema.Attr{
+			&schema.IndexType{T: "GIST"},
+		},
+	}
+	err := drv.AddExcludeConstraint(context.Background(), table, constraint)
+	if err != nil {
+		t.Fatalf("failed to add exclude constraint: %v", err)
+	}
+	expected := `ALTER TABLE "events" ADD CONSTRAINT "exclude_events" EXCLUDE USING GIST ("room" WITH =, "during" WITH &&)`
+	if mock.lastQuery != expected {
+		t.Errorf("unexpected query:\ngot:  %s\nwant: %s", mock.lastQuery, expected)
+	}
 }

@@ -10,113 +10,105 @@ import (
 	"strings"
 )
 
+// Schema represents a database schema.
+type Schema struct {
+	Name    string
+	Tables  []*Table
+	Views   []*View
+	Funcs   []*Func
+	Procs   []*Proc
+	Objects []Object
+	Attrs   []Attr
+}
+
+// Table represents a database table.
+type Table struct {
+	Name        string
+	Schema      *Schema
+	Columns     []*Column
+	Indexes     []*Index
+	PrimaryKey  *Index
+	ForeignKeys []*ForeignKey
+	Attrs       []Attr     // Attrs, constraints and options.
+	Triggers    []*Trigger // Triggers on the table.
+	Deps        []Object   // Objects this table depends on.
+	Refs        []Object   // Objects that depends on this table.
+}
+
+// Column represents a table column.
+type Column struct {
+	Name  string
+	Type  Type
+	Attrs []Attr
+}
+
+// Rows is the interface that wraps the basic methods for database rows.
+type Rows interface {
+	Next() bool
+	Scan(dest ...interface{}) error
+	Close() error
+}
+
+// Result is the result of a query execution.
+type Result interface {
+	LastInsertId() (int64, error)
+	RowsAffected() (int64, error)
+}
+
 type (
-	// A Realm or a database describes a domain of schema resources that are logically connected
-	// and can be accessed and queried in the same connection (e.g. a physical database instance).
 	Realm struct {
 		Schemas []*Schema
 		Attrs   []Attr
-		Objects []Object // Realm-level objects (e.g., users or extensions).
+		Objects []Object
 	}
 
-	// A Schema describes a database schema (i.e. named database).
-	Schema struct {
-		Name    string
-		Realm   *Realm
-		Tables  []*Table
-		Views   []*View
-		Funcs   []*Func
-		Procs   []*Proc
-		Attrs   []Attr   // Attrs and options.
-		Objects []Object // Schema-level objects (e.g., types or sequences).
-	}
-
-	// An Object represents a generic database object.
-	// Note that this interface is implemented by some top-level types
-	// to describe their relationship, and by driver specific types.
 	Object interface {
 		obj()
 	}
 
-	// A Table represents a table definition.
-	Table struct {
-		Name        string
-		Schema      *Schema
-		Columns     []*Column
-		Indexes     []*Index
-		PrimaryKey  *Index
-		ForeignKeys []*ForeignKey
-		Attrs       []Attr     // Attrs, constraints and options.
-		Triggers    []*Trigger // Triggers on the table.
-		Deps        []Object   // Objects this table depends on.
-		Refs        []Object   // Objects that depends on this table.
-	}
-
-	// A View represents a view definition.
 	View struct {
 		Name     string
 		Def      string
 		Schema   *Schema
 		Columns  []*Column
-		Attrs    []Attr     // Attrs and options.
-		Indexes  []*Index   // Indexes on materialized view.
-		Triggers []*Trigger // Triggers on the view.
-		Deps     []Object   // Objects this view depends on.
-		Refs     []Object   // Objects that depends on this view.
+		Attrs    []Attr
+		Indexes  []*Index
+		Triggers []*Trigger
+		Deps     []Object
+		Refs     []Object
 	}
 
-	// A Column represents a column definition.
-	Column struct {
-		Name    string
-		Type    *ColumnType
-		Default Expr
-		Attrs   []Attr
-		Indexes []*Index
-		// Foreign keys that this column is
-		// part of their child columns.
-		ForeignKeys []*ForeignKey
-	}
-	// NamedDefault defines a named default expression.
 	NamedDefault struct {
 		Expr
 		Name  string
 		Attrs []Attr
 	}
-	// ColumnType represents a column type that is implemented by the dialect.
+
 	ColumnType struct {
 		Type Type
 		Raw  string
 		Null bool
 	}
 
-	// An Index represents an index definition.
 	Index struct {
 		Name   string
 		Unique bool
-		// Table or View that this index belongs to.
-		Table *Table
-		View  *View
-		Attrs []Attr
-		Parts []*IndexPart
+		Table  *Table
+		View   *View
+		Attrs  []Attr
+		Parts  []*IndexPart
 	}
 
-	// An IndexPart represents an index part that
-	// can be either an expression or a column.
 	IndexPart struct {
-		// SeqNo represents the sequence number of the key part
-		// in the index.
 		SeqNo int
-		// Desc indicates if the key part is stored in descending
-		// order. All databases use ascending order as default.
 		Desc  bool
 		X     Expr
 		C     *Column
 		Attrs []Attr
 	}
 
-	// A ForeignKey represents an index definition.
 	ForeignKey struct {
-		Symbol     string // Constraint name, if exists.
+		Symbol     string
 		Table      *Table
 		Columns    []*Column
 		RefTable   *Table
@@ -126,68 +118,58 @@ type (
 		Attrs      []Attr
 	}
 
-	// A Trigger represents a trigger definition.
 	Trigger struct {
-		Name string
-		// Table or View that this trigger belongs to.
+		Name       string
 		Table      *Table
 		View       *View
-		ActionTime TriggerTime    // BEFORE, AFTER, or INSTEAD OF.
-		Events     []TriggerEvent // INSERT, UPDATE, DELETE, etc.
-		For        TriggerFor     // FOR EACH ROW or FOR EACH STATEMENT.
-		Body       string         // Trigger body only.
-		Attrs      []Attr         // WHEN, REFERENCING, etc.
-		Deps       []Object       // Objects this trigger depends on.
-		Refs       []Object       // Objects that depend on this trigger.
+		ActionTime TriggerTime
+		Events     []TriggerEvent
+		For        TriggerFor
+		Body       string
+		Attrs      []Attr
+		Deps       []Object
+		Refs       []Object
 	}
 
-	// TriggerTime represents the trigger action time.
 	TriggerTime string
+	TriggerFor  string
 
-	// TriggerFor represents the trigger FOR EACH spec.
-	TriggerFor string
-
-	// TriggerEvent represents the trigger event.
 	TriggerEvent struct {
-		Name    string    // Name of the event (e.g. INSERT, UPDATE, DELETE).
-		Columns []*Column // Columns that might be associated with the event.
+		Name    string
+		Columns []*Column
 	}
 
-	// Func represents a function definition.
 	Func struct {
 		Name   string
 		Schema *Schema
 		Args   []*FuncArg
 		Ret    Type
-		Body   string   // Function body only.
-		Lang   string   // Language (e.g. SQL, PL/pgSQL, etc.).
-		Attrs  []Attr   // Extra driver specific attributes.
-		Deps   []Object // Objects this function depends on.
-		Refs   []Object // Objects that depend on this function.
+		Body   string
+		Lang   string
+		Attrs  []Attr
+		Deps   []Object
+		Refs   []Object
 	}
 
-	// Proc represents a procedure definition.
 	Proc struct {
 		Name   string
 		Schema *Schema
 		Args   []*FuncArg
-		Body   string   // Function body only.
-		Lang   string   // Language (e.g. SQL, PL/pgSQL, etc.).
-		Attrs  []Attr   // Extra driver specific attributes.
-		Deps   []Object // Objects this function depends on.
-		Refs   []Object // Objects that depend on this Proc.
+		Body   string
+		Lang   string
+		Attrs  []Attr
+		Deps   []Object
+		Refs   []Object
 	}
 
-	// A FuncArg represents a single function argument.
 	FuncArg struct {
-		Name    string      // Optional name.
-		Type    Type        // Argument type.
-		Default Expr        // Default value.
-		Mode    FuncArgMode // Argument mode.
-		Attrs   []Attr      // Extra driver specific attributes.
+		Name    string
+		Type    Type
+		Default Expr
+		Mode    FuncArgMode
+		Attrs   []Attr
 	}
 
-	// FuncArgMode represents a function argument mode.
 	FuncArgMode string
 )
 
@@ -245,8 +227,7 @@ func (r *Realm) Object(f func(Object) bool) (Object, bool) {
 	return nil, false
 }
 
-// PosSetter wraps the two methods for getting
-// and setting positions for schema objects.
+// PosSetter wraps the two methods for getting and setting positions for schema objects.
 type PosSetter interface {
 	Pos() *Pos
 	SetPos(*Pos)
@@ -514,6 +495,8 @@ func (p *IndexPart) SetPos(p1 *Pos) {
 	ReplaceOrAppend(&p.Attrs, p1)
 }
 
+// ExcludeConstraint is defined in exclude.go
+
 // SetPos sets the position of the foreign key.
 func (f *ForeignKey) SetPos(p *Pos) {
 	ReplaceOrAppend(&f.Attrs, p)
@@ -632,6 +615,18 @@ const (
 	SetDefault ReferenceOption = "SET DEFAULT"
 )
 
+// Common reference option constants for convenience.
+var (
+	OnDeleteCascade  = Cascade
+	OnDeleteRestrict = Restrict
+	OnDeleteNoAction = NoAction
+	OnDeleteSetNull  = SetNull
+	OnUpdateCascade  = Cascade
+	OnUpdateRestrict = Restrict
+	OnUpdateNoAction = NoAction
+	OnUpdateSetNull  = SetNull
+)
+
 type (
 	// A Type represents a database type. The types below implements this
 	// interface and can be used for describing schemas.
@@ -649,40 +644,34 @@ type (
 		typ()
 	}
 
-	// EnumType represents an enum type.
 	EnumType struct {
-		T      string   // Optional type.
-		Values []string // Enum values.
-		Schema *Schema  // Optional schema.
-		Attrs  []Attr   // Extra attributes.
+		T      string
+		Values []string
+		Schema *Schema
+		Attrs  []Attr
 	}
 
-	// BinaryType represents a type that stores binary data.
 	BinaryType struct {
 		T    string
 		Size *int
 	}
 
-	// StringType represents a string type.
 	StringType struct {
 		T     string
 		Size  int
 		Attrs []Attr
 	}
 
-	// BoolType represents a boolean type.
 	BoolType struct {
 		T string
 	}
 
-	// IntegerType represents an int type.
 	IntegerType struct {
 		T        string
 		Unsigned bool
 		Attrs    []Attr
 	}
 
-	// DecimalType represents a fixed-point type that stores exact numeric values.
 	DecimalType struct {
 		T         string
 		Precision int
@@ -690,14 +679,12 @@ type (
 		Unsigned  bool
 	}
 
-	// FloatType represents a floating-point type that stores approximate numeric values.
 	FloatType struct {
 		T         string
 		Unsigned  bool
 		Precision int
 	}
 
-	// TimeType represents a date/time type.
 	TimeType struct {
 		T         string
 		Precision *int
@@ -705,43 +692,35 @@ type (
 		Attrs     []Attr
 	}
 
-	// JSONType represents a JSON type.
 	JSONType struct {
 		T string
 	}
 
-	// SpatialType represents a spatial/geometric type.
 	SpatialType struct {
 		T string
 	}
 
-	// A UUIDType defines a UUID type.
 	UUIDType struct {
 		T string
 	}
 
-	// UnsupportedType represents a type that is not supported by the drivers.
 	UnsupportedType struct {
 		T string
 	}
 
-	// TypeParser is an interface that is required be implemented by
-	// different drivers for parsing column types from their database
-	// forms to the schema representation.
+	BitType struct {
+		T   string
+		Len int
+	}
+
 	TypeParser interface {
-		// ParseType converts the raw database type to its schema.Type representation.
 		ParseType(string) (Type, error)
 	}
 
-	// TypeFormatter is an interface that is required to be implemented by
-	// different drivers to format column types into their corresponding
-	// database forms.
 	TypeFormatter interface {
-		// FormatType converts a schema type to its column form in the database.
 		FormatType(Type) (string, error)
 	}
 
-	// TypeParseFormatter that groups the TypeParser and TypeFormatter interfaces.
 	TypeParseFormatter interface {
 		TypeParser
 		TypeFormatter
@@ -765,76 +744,59 @@ type (
 		expr()
 	}
 
-	// Literal represents a basic literal expression like 1, or '1'.
-	// String literals are usually quoted with single or double quotes.
 	Literal struct {
 		V string
 	}
 
-	// RawExpr represents a raw expression like "uuid()" or "current_timestamp()".
-	// Unlike literals, raw expression are usually inlined as is on migration.
 	RawExpr struct {
 		X string
 	}
 )
 
 type (
-	// Attr represents the interface that all attributes implement.
 	Attr interface {
 		attr()
 	}
 
-	// Comment describes a schema element comment.
 	Comment struct {
 		Text string
 	}
 
-	// Charset describes a column or a table character-set setting.
 	Charset struct {
 		V string
 	}
 
-	// Collation describes a column or a table collation setting.
 	Collation struct {
 		V string
 	}
 
-	// Check describes a CHECK constraint.
 	Check struct {
-		Name  string // Optional constraint name.
-		Expr  string // Actual CHECK.
-		Attrs []Attr // Additional attributes (e.g. ENFORCED).
+		Name  string
+		Expr  string
+		Attrs []Attr
 	}
 
-	// GeneratedExpr describes the expression used for generating
-	// the value of a generated/virtual column.
 	GeneratedExpr struct {
 		Expr string
-		Type string // Optional type. e.g. STORED or VIRTUAL.
+		Type string
 	}
 
-	// ViewCheckOption describes the standard 'WITH CHECK OPTION clause' of a view.
 	ViewCheckOption struct {
-		V string // LOCAL, CASCADED, NONE, or driver specific.
+		V string
 	}
 
-	// Materialized is a schema attribute that attached to views to indicates
-	// they are MATERIALIZED VIEWs.
-	Materialized struct {
-		Attr
-	}
-
-	// Pos is an attribute that holds the position of a schema element.
-	Pos struct {
-		// Filename is the name (or full path) of the file which loaded the schema element.
-		Filename string
-
-		// Start and End represent the bounds of this range.
-		Start, End struct {
-			Line, Column, Byte int // hcl.Pos fields.
-		}
-	}
+	Materialized struct{}
 )
+
+// Implement the Attr interface for Materialized
+func (*Materialized) attr() {}
+
+type Pos struct {
+	Filename   string
+	Start, End struct {
+		Line, Column, Byte int
+	}
+}
 
 // String returns the position in editor/LSP style.
 // Format: "filename:line[:c][-end_line[:end_c]]"
@@ -859,60 +821,6 @@ func (p *Pos) String() string {
 	return b.String()
 }
 
-// A list of known view check options.
-const (
-	ViewCheckOptionNone     = "NONE"
-	ViewCheckOptionLocal    = "LOCAL"
-	ViewCheckOptionCascaded = "CASCADED"
-)
-
-// objects.
-func (*Table) obj()    {}
-func (*View) obj()     {}
-func (*Func) obj()     {}
-func (*Proc) obj()     {}
-func (*Trigger) obj()  {}
-func (*EnumType) obj() {}
-
-// constraints are objects.
-func (*Index) obj()        {}
-func (*Check) obj()        {}
-func (*ForeignKey) obj()   {}
-func (*NamedDefault) obj() {}
-
-// expressions.
-func (*Literal) expr() {}
-func (*RawExpr) expr() {}
-
-// types.
-func (*BoolType) typ()        {}
-func (*EnumType) typ()        {}
-func (*TimeType) typ()        {}
-func (*JSONType) typ()        {}
-func (*FloatType) typ()       {}
-func (*StringType) typ()      {}
-func (*BinaryType) typ()      {}
-func (*SpatialType) typ()     {}
-func (*UUIDType) typ()        {}
-func (*IntegerType) typ()     {}
-func (*DecimalType) typ()     {}
-func (*UnsupportedType) typ() {}
-
-// attributes.
-func (*Pos) attr()             {}
-func (*Check) attr()           {}
-func (*Comment) attr()         {}
-func (*Charset) attr()         {}
-func (*Collation) attr()       {}
-func (*GeneratedExpr) attr()   {}
-func (*ViewCheckOption) attr() {}
-
-// SpecType returns the type of the spec.
-func (e *EnumType) SpecType() string { return "enum" }
-
-// SpecName returns the name of the spec.
-func (e *EnumType) SpecName() string { return e.T }
-
 // Underlying returns underlying the expression.
 func (n *NamedDefault) Underlying() Expr {
 	return n.Expr
@@ -934,7 +842,7 @@ func UnderlyingType(t Type) Type {
 	return t
 }
 
-// IsType return true if somewhere in the type-chain of t1 is the same as t2.
+// IsType returns true if somewhere in the type-chain of t1 is the same as t2.
 func IsType(t1, t2 Type) bool {
 	if t1 == nil || t2 == nil {
 		return t1 == t2
@@ -942,20 +850,15 @@ func IsType(t1, t2 Type) bool {
 	return sameType(t1, t2, reflect.TypeOf(t2).Comparable())
 }
 
+// sameType is a helper function for IsType.
 func sameType(t1, t2 Type, targetComparable bool) bool {
 	for {
 		if targetComparable && t1 == t2 {
 			return true
 		}
-		// Check if t1 implements the Is method.
-		// Then call it to check if it is the same as t2.
-		// This is useful for comparing types that are
-		// not directly the same pointer.
 		if x, ok := t1.(interface{ Is(Type) bool }); ok && x.Is(t2) {
 			return true
 		}
-		// Check if t1 has an underlying type.
-		// Then use it to compare with t2.
 		if x, ok := t1.(interface{ Underlying() Type }); ok {
 			if t1 = x.Underlying(); t1 != nil {
 				continue
@@ -964,3 +867,10 @@ func sameType(t1, t2 Type, targetComparable bool) bool {
 		return false
 	}
 }
+
+type Option func(interface{})
+type option = Option
+
+type CascadeOn struct{}
+
+func (*CascadeOn) attr() {}

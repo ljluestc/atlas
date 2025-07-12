@@ -68,8 +68,8 @@ func TestSchema_AddTables(t *testing.T) {
 				AddColumns(postColumns[2]).
 				SetRefTable(users).
 				AddRefColumns(userColumns[0]).
-				SetOnDelete(schema.Cascade).
-				SetOnUpdate(schema.SetNull),
+				SetOnDelete(schema.OnDeleteCascade).
+				SetOnUpdate(schema.OnUpdateSetNull),
 		)
 	require.Equal(
 		t,
@@ -127,7 +127,7 @@ func TestSchema_AddTables(t *testing.T) {
 				RefTable:   users,
 				RefColumns: users.Columns[0:1],
 				OnDelete:   schema.Cascade,
-				OnUpdate:   schema.SetNull,
+				OnUpdate:   schema.OnUpdateSetNull,
 			})
 			posts.Columns[2].ForeignKeys = posts.ForeignKeys
 			return s
